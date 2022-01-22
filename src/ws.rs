@@ -1,8 +1,7 @@
-use crate::{cleanup_session, SafeClients, SafeSessions};
+use crate::{cleanup_session, sessions::Client, SafeClients, SafeSessions};
 use futures::{Future, FutureExt, StreamExt};
-use sessions::session_types::{self, Client};
 use std::sync::Arc;
-use tokio::sync::mpsc::{self};
+use tokio::sync::mpsc;
 use urlencoding::decode;
 use warp::ws::WebSocket;
 
@@ -50,7 +49,7 @@ pub async fn client_connection<T, Fut: Future>(
     //======================================================
     clients.write().await.insert(
         id.clone(),
-        session_types::Client {
+        Client {
             id: id.clone(),
             sender: Some(client_sender),
             session_id: get_client_session_id(&id, &sessions).await,

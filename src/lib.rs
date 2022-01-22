@@ -1,7 +1,6 @@
 use futures::Future;
 use serde::Serialize;
-use sessions::session_types::Client;
-use sessions::session_types::{Clients, Sessions};
+use sessions::{Client, Clients, Sessions};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -9,22 +8,37 @@ use warp::filters::BoxedFilter;
 use warp::ws::Message;
 use warp::{Filter, Reply};
 
+/// Definitions for Client and Session Scheme with some helper methods
+pub mod sessions;
+
 mod handler;
 mod ws;
 
+/// Wrapper for an object that is safe across threads and has a long lifespan in order to satisfy warp filters + async
 type SafeResource<T> = Arc<RwLock<T>>;
 
+/// An Async safe Client Storage with runtime controlled cleanup (by Arc<RwLock<T>>)
 pub type SafeClients = SafeResource<Clients>;
+/// An Async safe Session Storage with runtime controlled cleanup (by Arc<RwLock<T>>)
 pub type SafeSessions<T> = SafeResource<Sessions<T>>;
 
+/// Configuration for the server
+///
+/// This includes variables, callbacks, or bootstrappable onto the server
 pub struct ServerConfig<T, Fut1, Fut2>
 where
     T: Clone,
     Fut1: Future + Send + Sync,
     Fut2: Future + Send + Sync,
 {
+    /// Whether or not to run the server tick handler
+    pub tick_server: bool,
+    /// An async function pointer to a handler for the server tick
     pub tick_handler: fn(SafeClients, SafeSessions<T>) -> Fut1,
-    pub event_handler: fn(String, String, SafeClients, SafeSessions<T>) -> Fut2,
+    /// An async function pointer to a handler for websocket message events
+    ///
+    /// The events will be parsed to strings before getting passed to the handler
+    pub message_handler: fn(String, String, SafeClients, SafeSessions<T>) -> Fut2,
 }
 
 /// Composite backend and frontend routes for the entire server
@@ -53,7 +67,7 @@ where
     let sessions: SafeSessions<T> = Arc::new(RwLock::new(HashMap::new()));
     let health = warp::path!("health").and_then(handler::health_handler);
 
-    let event_handler = Arc::new(config.event_handler);
+    let event_handler = Arc::new(config.message_handler);
 
     let (clients1, sessions1) = (clients.clone(), sessions.clone());
     let socket = warp::path("ws")
@@ -66,11 +80,18 @@ where
         .and_then(handler::ws_handler);
 
     let (clients2, sessions2) = (clients.clone(), sessions.clone());
-    let tick_handler = Arc::new(config.tick_handler);
-    tokio::spawn(async move {
-        log::info!("running server tick");
-        tick_handler(clients2.clone(), sessions2.clone()).await
-    });
+
+    if config.tick_server {
+        let tick_handler = Arc::new(config.tick_handler);
+        tokio::spawn(async move {
+            log::info!("starting server tick");
+            loop {
+                tick_handler(clients2.clone(), sessions2.clone()).await
+            }
+        });
+    } else {
+        log::info!("server was not set to not run a tick handler.");
+    }
 
     health.or(socket).boxed()
 }
@@ -80,8 +101,8 @@ fn frontend() -> BoxedFilter<(impl Reply,)> {
     warp::fs::dir("dist").boxed()
 }
 
-/// Send an update to a single client
-pub fn notify_client<T>(client: &Client, message: &T)
+/// Send a websocket message to a single client
+pub fn message_client<T>(client: &Client, message: &T)
 where
     T: Serialize,
 {

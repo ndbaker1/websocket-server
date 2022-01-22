@@ -812,17 +812,8 @@ dependencies = [
  "nanorand",
  "serde",
  "serde_json",
- "sessions",
  "tokio",
  "urlencoding 2.1.0",
- "warp",
-]
-
-[[package]]
-name = "sessions"
-version = "0.1.0"
-dependencies = [
- "tokio",
  "warp",
 ]
 

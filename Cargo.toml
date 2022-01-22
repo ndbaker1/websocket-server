@@ -3,18 +3,17 @@ name = "server"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-sessions = { path = "./src/sessions" }
+log = "0.4" # add a logging backend in your project
 
-log = "0.4"
-
+futures = { version = "0.3", default-features = false }
 tokio = { version = "0.2", features = ["macros", "sync", "time"] }
 warp = "0.2"
+
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-futures = { version = "0.3", default-features = false }
+
 nanoid = "0.4.0"
 nanorand = "0.6.1"
+
 urlencoding = "2.1.0"
