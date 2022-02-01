@@ -121,10 +121,10 @@ where
 }
 
 /// Remove a sessions and the possible game state that accompanies it
-pub async fn cleanup_session<T>(session_id: &str, sessions: &SafeSessions<T>) {
+pub fn cleanup_session<T>(session_id: &str, sessions: &mut Sessions<T>) {
     // remove session
-    sessions.write().await.remove(session_id);
+    sessions.remove(session_id);
     // log status
     log::info!("removed empty session");
-    log::info!("sessions live: {}", sessions.read().await.len());
+    log::info!("sessions live: {}", sessions.len());
 }

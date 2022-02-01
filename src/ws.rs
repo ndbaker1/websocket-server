@@ -1,4 +1,8 @@
-use crate::{cleanup_session, sessions::Client, SafeClients, SafeSessions};
+use crate::{
+    cleanup_session,
+    sessions::{Client, Sessions},
+    SafeClients, SafeSessions,
+};
 use futures::{Future, FutureExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -52,7 +56,10 @@ pub async fn client_connection<T, Fut: Future>(
         Client {
             id: id.clone(),
             sender: Some(client_sender),
-            session_id: get_client_session_id(&id, &sessions).await,
+            session_id: {
+                let sessions = sessions.read().await;
+                get_client_session_id(&id, &sessions)
+            },
         },
     );
 
@@ -127,7 +134,8 @@ async fn handle_client_disconnect<T>(client: &Client, sessions: &SafeSessions<T>
         }
         // remove the session if empty
         if session_empty {
-            cleanup_session(session_id, sessions).await;
+            let mut write_sessions = sessions.write().await;
+            cleanup_session(session_id, &mut write_sessions);
         }
     }
 }
@@ -145,8 +153,8 @@ async fn handle_client_connect<T>(client: &Client, sessions: &SafeSessions<T>) {
 }
 
 /// Gets the SessionID of a client if it exists
-async fn get_client_session_id<T>(client_id: &str, sessions: &SafeSessions<T>) -> Option<String> {
-    for session in sessions.read().await.values() {
+fn get_client_session_id<T>(client_id: &str, sessions: &Sessions<T>) -> Option<String> {
+    for session in sessions.values() {
         if session.contains_client(client_id) {
             return Some(session.id.clone());
         }
