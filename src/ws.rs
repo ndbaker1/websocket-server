@@ -4,18 +4,17 @@ use crate::{
     SafeClients, SafeSessions,
 };
 use futures::{Future, FutureExt, StreamExt};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use urlencoding::decode;
 use warp::ws::WebSocket;
 
 /// The Initial Setup for a WebSocket Connection
-pub async fn client_connection<T, Fut: Future>(
+pub async fn client_connection<T, Fut: Future<Output = ()>>(
     ws: WebSocket,
     connection_id: String,
     clients: SafeClients,
     sessions: SafeSessions<T>,
-    event_handler: Arc<fn(String, String, SafeClients, SafeSessions<T>) -> Fut>,
+    event_handler: fn(String, String, SafeClients, SafeSessions<T>) -> Fut,
 ) {
     // Decode the strings coming in over URL parameters so we dont get things like '%20'
     // for spaces in our clients map

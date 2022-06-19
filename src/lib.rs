@@ -25,30 +25,24 @@ pub type SafeSessions<T> = SafeResource<Sessions<T>>;
 /// Configuration for the server
 ///
 /// This includes variables, callbacks, or bootstrappable onto the server
-pub struct ServerConfig<T, Fut1, Fut2>
+pub struct ServerConfig<T, Fut>
 where
     T: Clone,
-    Fut1: Future + Send + Sync,
-    Fut2: Future + Send + Sync,
+    Fut: Future<Output = ()>,
 {
-    /// Whether or not to run the server tick handler
-    pub tick_server: bool,
-    /// An async function pointer to a handler for the server tick
-    pub tick_handler: fn(SafeClients, SafeSessions<T>) -> Fut1,
     /// An async function pointer to a handler for websocket message events
     ///
     /// The events will be parsed to strings before getting passed to the handler
-    pub message_handler: fn(String, String, SafeClients, SafeSessions<T>) -> Fut2,
+    pub message_handler: fn(String, String, SafeClients, SafeSessions<T>) -> Fut,
+    /// An async function pointer to a handler for the server tick
+    pub tick_handler: Option<fn(SafeClients, SafeSessions<T>) -> Fut>,
 }
 
 /// Composite backend and frontend routes for the entire server
-pub fn server<T, Fut1, Fut2>(
-    server_config: ServerConfig<T, Fut1, Fut2>,
-) -> BoxedFilter<(impl Reply,)>
+pub fn server<T, Fut>(server_config: ServerConfig<T, Fut>) -> BoxedFilter<(impl Reply,)>
 where
     T: Clone + Send + Sync + 'static,
-    Fut1: Future<Output = ()> + Send + Sync + 'static,
-    Fut2: Future<Output = ()> + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + Sync + 'static,
 {
     warp::path("api")
         .and(backend(server_config))
@@ -57,17 +51,14 @@ where
 }
 
 /// Routes handling server requests and connections
-fn backend<T, Fut1, Fut2>(config: ServerConfig<T, Fut1, Fut2>) -> BoxedFilter<(impl Reply,)>
+fn backend<T, Fut>(config: ServerConfig<T, Fut>) -> BoxedFilter<(impl Reply,)>
 where
     T: Clone + Send + Sync + 'static,
-    Fut1: Future<Output = ()> + Send + Sync + 'static,
-    Fut2: Future<Output = ()> + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + Sync + 'static,
 {
     let clients: SafeClients = Arc::new(RwLock::new(HashMap::new()));
     let sessions: SafeSessions<T> = Arc::new(RwLock::new(HashMap::new()));
     let health = warp::path!("health").and_then(handler::health_handler);
-
-    let event_handler = Arc::new(config.message_handler);
 
     let (clients1, sessions1) = (clients.clone(), sessions.clone());
     let socket = warp::path("ws")
@@ -76,21 +67,21 @@ where
         // pass copies of our references for the client and sessions maps to our handler
         .and(warp::any().map(move || clients1.clone()))
         .and(warp::any().map(move || sessions1.clone()))
-        .and(warp::any().map(move || event_handler.clone()))
+        .and(warp::any().map(move || config.message_handler))
         .and_then(handler::ws_handler);
 
     let (clients2, sessions2) = (clients.clone(), sessions.clone());
 
-    if config.tick_server {
-        let tick_handler = Arc::new(config.tick_handler);
-        tokio::spawn(async move {
+    match config.tick_handler {
+        Some(tick_handler) => {
             log::info!("starting server tick");
-            loop {
-                tick_handler(clients2.clone(), sessions2.clone()).await
-            }
-        });
-    } else {
-        log::info!("server was not set to not run a tick handler.");
+            tokio::spawn(async move {
+                loop {
+                    tick_handler(clients2.clone(), sessions2.clone()).await;
+                }
+            });
+        }
+        None => log::info!("server was not set to not run a tick handler."),
     }
 
     health.or(socket).boxed()

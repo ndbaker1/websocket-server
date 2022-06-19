@@ -1,7 +1,6 @@
 use crate::{ws, SafeClients, SafeSessions};
 use futures::Future;
 use log::info;
-use std::sync::Arc;
 use warp::hyper::StatusCode;
 use warp::Rejection;
 use warp::Reply;
@@ -19,11 +18,11 @@ pub async fn ws_handler<T, Fut>(
     id: String,
     clients: SafeClients,
     sessions: SafeSessions<T>,
-    event_handler: Arc<fn(String, String, SafeClients, SafeSessions<T>) -> Fut>,
+    event_handler: fn(String, String, SafeClients, SafeSessions<T>) -> Fut,
 ) -> Result<impl Reply>
 where
     T: Clone + Send + Sync + 'static,
-    Fut: Future + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
 {
     let client_exists = clients.read().await.get(&id).is_none();
     match client_exists {
