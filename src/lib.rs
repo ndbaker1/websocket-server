@@ -31,10 +31,8 @@ where
     Fut1: Future + Send + Sync,
     Fut2: Future + Send + Sync,
 {
-    /// Whether or not to run the server tick handler
-    pub tick_server: bool,
     /// An async function pointer to a handler for the server tick
-    pub tick_handler: fn(SafeClients, SafeSessions<T>) -> Fut1,
+    pub tick_handler: Option<fn(SafeClients, SafeSessions<T>) -> Fut1>,
     /// An async function pointer to a handler for websocket message events
     ///
     /// The events will be parsed to strings before getting passed to the handler
@@ -81,16 +79,16 @@ where
 
     let (clients2, sessions2) = (clients.clone(), sessions.clone());
 
-    if config.tick_server {
-        let tick_handler = Arc::new(config.tick_handler);
-        tokio::spawn(async move {
-            log::info!("starting server tick");
-            loop {
-                tick_handler(clients2.clone(), sessions2.clone()).await
-            }
-        });
-    } else {
-        log::info!("server was not set to not run a tick handler.");
+    match config.tick_handler {
+        Some(tick_handler) => {
+            tokio::spawn(async move {
+                log::info!("starting server tick");
+                loop {
+                    tick_handler(clients2.clone(), sessions2.clone()).await
+                }
+            });
+        }
+        None => log::info!("server was not set to not run a tick handler."),
     }
 
     health.or(socket).boxed()
@@ -127,4 +125,15 @@ pub fn cleanup_session<T>(session_id: &str, sessions: &mut Sessions<T>) {
     // log status
     log::info!("removed empty session");
     log::info!("sessions live: {}", sessions.len());
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn compiles() {}
+
+    async fn empty_async() -> u32 {
+        0
+    }
 }
