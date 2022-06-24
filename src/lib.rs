@@ -22,81 +22,80 @@ pub type SafeClients = SafeResource<Clients>;
 /// An Async safe Session Storage with runtime controlled cleanup (by Arc<RwLock<T>>)
 pub type SafeSessions<T> = SafeResource<Sessions<T>>;
 
-/// Configuration for the server
-///
-/// This includes variables, callbacks, or bootstrappable onto the server
+/// Configuration for the server,
+/// including variables, callbacks for the server
 pub struct ServerConfig<T, Fut1, Fut2>
 where
-    T: Clone,
-    Fut1: Future + Send + Sync,
-    Fut2: Future + Send + Sync,
+    Fut1: Future<Output = ()>,
+    Fut2: Future<Output = ()>,
 {
     /// An async function pointer to a handler for the server tick
     pub tick_handler: Option<fn(SafeClients, SafeSessions<T>) -> Fut1>,
     /// An async function pointer to a handler for websocket message events
     ///
     /// The events will be parsed to strings before getting passed to the handler
-    pub message_handler: fn(String, String, SafeClients, SafeSessions<T>) -> Fut2,
+    pub event_handler: fn(String, String, SafeClients, SafeSessions<T>) -> Fut2,
 }
 
 /// Composite backend and frontend routes for the entire server
+///
+/// ```
+/// use websocket_server::*;
+///
+/// async fn custom_tick_handler(_: SafeClients, _: SafeSessions<()>) {}
+/// async fn custom_message_handler(_: String, _: String, _: SafeClients, _: SafeSessions<()>) {}
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let app = server(ServerConfig {
+///         event_handler: custom_message_handler,
+///         tick_handler: Some(custom_tick_handler),
+///     });
+/// }
+/// ```
 pub fn server<T, Fut1, Fut2>(
     server_config: ServerConfig<T, Fut1, Fut2>,
 ) -> BoxedFilter<(impl Reply,)>
 where
-    T: Clone + Send + Sync + 'static,
-    Fut1: Future<Output = ()> + Send + Sync + 'static,
-    Fut2: Future<Output = ()> + Send + Sync + 'static,
+    T: 'static + Clone + Send + Sync,
+    Fut1: 'static + Future<Output = ()> + Send + Sync,
+    Fut2: 'static + Future<Output = ()> + Send + Sync,
 {
-    warp::path("api")
-        .and(backend(server_config))
-        .or(frontend())
-        .boxed()
-}
+    // Routes handling server requests and connections
+    let backend = {
+        let clients: SafeClients = Arc::new(RwLock::new(HashMap::new()));
+        let sessions: SafeSessions<T> = Arc::new(RwLock::new(HashMap::new()));
+        let health = warp::path!("health").and_then(handler::health_handler);
 
-/// Routes handling server requests and connections
-fn backend<T, Fut1, Fut2>(config: ServerConfig<T, Fut1, Fut2>) -> BoxedFilter<(impl Reply,)>
-where
-    T: Clone + Send + Sync + 'static,
-    Fut1: Future<Output = ()> + Send + Sync + 'static,
-    Fut2: Future<Output = ()> + Send + Sync + 'static,
-{
-    let clients: SafeClients = Arc::new(RwLock::new(HashMap::new()));
-    let sessions: SafeSessions<T> = Arc::new(RwLock::new(HashMap::new()));
-    let health = warp::path!("health").and_then(handler::health_handler);
+        let (clients1, sessions1) = (clients.clone(), sessions.clone());
+        let socket = warp::path("ws")
+            .and(warp::ws())
+            .and(warp::path::param())
+            // pass copies of our references for the client and sessions maps to our handler
+            .and(warp::any().map(move || clients1.clone()))
+            .and(warp::any().map(move || sessions1.clone()))
+            .and(warp::any().map(move || server_config.event_handler))
+            .and_then(handler::ws_handler);
 
-    let event_handler = Arc::new(config.message_handler);
-
-    let (clients1, sessions1) = (clients.clone(), sessions.clone());
-    let socket = warp::path("ws")
-        .and(warp::ws())
-        .and(warp::path::param())
-        // pass copies of our references for the client and sessions maps to our handler
-        .and(warp::any().map(move || clients1.clone()))
-        .and(warp::any().map(move || sessions1.clone()))
-        .and(warp::any().map(move || event_handler.clone()))
-        .and_then(handler::ws_handler);
-
-    let (clients2, sessions2) = (clients.clone(), sessions.clone());
-
-    match config.tick_handler {
-        Some(tick_handler) => {
-            tokio::spawn(async move {
-                log::info!("starting server tick");
-                loop {
-                    tick_handler(clients2.clone(), sessions2.clone()).await
-                }
-            });
+        match server_config.tick_handler {
+            Some(tick_handler) => {
+                tokio::spawn(async move {
+                    log::info!("starting server tick task..");
+                    loop {
+                        tick_handler(clients.clone(), sessions.clone()).await;
+                    }
+                });
+            }
+            None => log::info!("server was not set to not run a tick handler."),
         }
-        None => log::info!("server was not set to not run a tick handler."),
-    }
 
-    health.or(socket).boxed()
-}
+        health.or(socket).boxed()
+    };
 
-/// Routes for serving static website files
-fn frontend() -> BoxedFilter<(impl Reply,)> {
-    warp::fs::dir("dist").boxed()
+    // Routes for serving static website files
+    let frontend = warp::fs::dir("dist").boxed();
+
+    warp::path("api").and(backend).or(frontend).boxed()
 }
 
 /// Send a websocket message to a single client
@@ -125,15 +124,4 @@ pub fn cleanup_session<T>(session_id: &str, sessions: &mut Sessions<T>) {
     // log status
     log::info!("removed empty session");
     log::info!("sessions live: {}", sessions.len());
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    fn compiles() {}
-
-    async fn empty_async() -> u32 {
-        0
-    }
 }

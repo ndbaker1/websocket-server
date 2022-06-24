@@ -4,19 +4,21 @@ use crate::{
     SafeClients, SafeSessions,
 };
 use futures::{Future, FutureExt, StreamExt};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use urlencoding::decode;
 use warp::ws::WebSocket;
 
 /// The Initial Setup for a WebSocket Connection
-pub async fn client_connection<T, Fut: Future>(
+pub async fn client_connection<T, Fut, EventHandler>(
     ws: WebSocket,
     connection_id: String,
     clients: SafeClients,
     sessions: SafeSessions<T>,
-    event_handler: Arc<fn(String, String, SafeClients, SafeSessions<T>) -> Fut>,
-) {
+    event_handler: EventHandler,
+) where
+    Fut: Future<Output = ()>,
+    EventHandler: Fn(String, String, SafeClients, SafeSessions<T>) -> Fut,
+{
     // Decode the strings coming in over URL parameters so we dont get things like '%20'
     // for spaces in our clients map
     let id = decode(&connection_id).expect("UTF-8").to_string();
@@ -64,7 +66,7 @@ pub async fn client_connection<T, Fut: Future>(
     );
 
     if let Some(client) = clients.read().await.get(&id) {
-        handle_client_connect(&client, &sessions).await;
+        handle_client_connect(client, &sessions).await;
     }
     //======================================================
     // Synchronously wait for messages from the
@@ -159,5 +161,6 @@ fn get_client_session_id<T>(client_id: &str, sessions: &Sessions<T>) -> Option<S
             return Some(session.id.clone());
         }
     }
-    return None;
+
+    None
 }
